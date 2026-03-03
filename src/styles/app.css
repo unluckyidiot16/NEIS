@@ -483,4 +483,66 @@ body {
   .chat-input-container {
     padding: 10px 12px 14px;
   }
+
+    /* === Source References (근거 페이지 링크) === */
+    .source-references {
+        margin-top: 12px;
+        padding: 10px 14px;
+        background: #F1F8E9;
+        border: 1px solid #C5E1A5;
+        border-radius: var(--radius-sm);
+        font-size: 13px;
+        line-height: 1.6;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .source-label {
+        font-weight: 600;
+        color: var(--color-primary);
+        margin-right: 2px;
+    }
+
+    .source-manual {
+        color: var(--color-text-secondary);
+        font-weight: 500;
+        margin-right: 4px;
+    }
+
+    .source-page-link {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 10px;
+        background: var(--color-primary);
+        color: white;
+        border-radius: 12px;
+        text-decoration: none;
+        font-size: 12px;
+        font-weight: 600;
+        transition: all 0.15s;
+        cursor: pointer;
+    }
+
+    .source-page-link:hover {
+        background: var(--color-primary-light);
+        transform: translateY(-1px);
+        box-shadow: 0 2px 6px rgba(27, 94, 59, 0.3);
+    }
+
+    .source-page-link:active {
+        transform: translateY(0);
+    }
+
+    .source-page {
+        display: inline-flex;
+        padding: 2px 10px;
+        background: var(--color-border);
+        color: var(--color-text-secondary);
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 500;
+    }
+  
 }
