@@ -110,14 +110,7 @@ export function useChat() {
                     const decoder = new TextDecoder();
                     let buffer = "";
 
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-
-                        buffer += decoder.decode(value, { stream: true });
-                        const lines = buffer.split("\n");
-                        buffer = lines.pop() || "";
-
+                    const processLines = (lines: string[]) => {
                         for (const line of lines) {
                             if (!line.startsWith("data: ")) continue;
                             const payload = line.slice(6).trim();
@@ -140,6 +133,22 @@ export function useChat() {
                                 // 파싱 실패한 줄은 무시
                             }
                         }
+                    };
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) {
+                            // ✅ 스트림 종료 시 버퍼에 남은 데이터 처리
+                            if (buffer.trim()) {
+                                processLines(buffer.split("\n"));
+                            }
+                            break;
+                        }
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split("\n");
+                        buffer = lines.pop() || "";
+                        processLines(lines);
                     }
                 } else {
                     // ── 일반 JSON 응답 (폴백) ──

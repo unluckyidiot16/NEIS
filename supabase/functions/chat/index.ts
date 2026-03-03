@@ -134,7 +134,7 @@ function buildGeminiRequest(userPrompt: string) {
         generationConfig: {
             temperature: 0.3,
             topP: 0.8,
-            maxOutputTokens: 4096,
+            maxOutputTokens: 8192,
         },
     };
 }
