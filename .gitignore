@@ -1,0 +1,21 @@
+node_modules
+dist
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 매뉴얼 원본 (DB에 인제스트 완료, 리포에 불필요)
+*.pdf
+교무업무_매뉴얼_텍스트추출*.txt
+manual_chunks.csv
+
+# Supabase 로컬
+.supabase/

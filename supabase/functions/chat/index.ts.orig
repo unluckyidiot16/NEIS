@@ -1,0 +1,193 @@
+// supabase/functions/chat/index.ts
+// Supabase Edge Function (Deno 런타임) - Gemini REST API 호출
+
+import { corsHeaders } from "../_shared/cors.ts";
+
+// 환경변수에서 설정값 로드
+const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
+const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") || "gemini-2.0-flash";
+
+// 사전 업로드된 PDF의 file URI (1회 업로드 후 환경변수에 저장)
+const MANUAL_1_URI = Deno.env.get("MANUAL_1_URI")!; // 교무업무 매뉴얼
+const MANUAL_2_URI = Deno.env.get("MANUAL_2_URI")!; // 학교관리자 매뉴얼
+
+const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_STREAM_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse&key=${GEMINI_API_KEY}`;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// ✅ Gemini 429/503(레이트리밋/일시적 장애)일 때 짧게 재시도
+async function fetchGeminiWithRetry(
+  url: string,
+  payload: unknown,
+  maxAttempts: number = 3
+): Promise<Response> {
+  const body = JSON.stringify(payload);
+  const headers = { "Content-Type": "application/json" };
+  let delayMs = 900;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const res = await fetch(url, { method: "POST", headers, body });
+    if (res.status !== 429 && res.status !== 503) return res;
+    if (attempt === maxAttempts) return res;
+
+    const ra = res.headers.get("retry-after");
+    const waitMs = ra && !Number.isNaN(Number(ra)) ? Number(ra) * 1000 : delayMs;
+    await sleep(waitMs + Math.floor(Math.random() * 200)); // 약간의 지터
+    delayMs *= 2;
+  }
+
+  // 타입상 도달 불가하지만 안전빵
+  return await fetch(url, { method: "POST", headers, body });
+}
+
+// 시스템 프롬프트
+const SYSTEM_INSTRUCTION = `당신은 경기도 초등학교 교원 및 학교관리자를 위한 나이스(NEIS) 업무 지원 전문 AI 가이드입니다.
+
+첨부된 '교무업무 매뉴얼'과 '학교관리자 매뉴얼'을 최우선으로 참고하여 답변하세요.
+
+## 답변 규칙
+1. 매뉴얼에 명시된 정확한 메뉴 경로(예: [교무업무]-[학사일정])와 처리 절차를 단계별로 안내하세요.
+2. 제공된 매뉴얼에 없는 내용이라면 "제공된 매뉴얼에서는 확인이 어렵습니다."라고 솔직하게 답변하고 지어내지 마세요.
+3. 동료 교사에게 설명하듯 친절하고 전문적인 톤을 유지하세요.
+4. 절차가 복잡한 경우 번호를 매겨 단계별로 정리해 주세요.
+5. 관련된 주의사항이나 팁이 있다면 함께 안내해 주세요.`;
+
+// 대화 히스토리를 Gemini API 형식으로 변환
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+function buildGeminiRequest(messages: ChatMessage[], stream: boolean = false) {
+  // 첫 번째 사용자 메시지에 PDF 파일 데이터 첨부
+  const contents = messages.map((msg, index) => {
+    const parts: any[] = [];
+
+    // 첫 번째 사용자 메시지에만 PDF 파일 참조 추가
+    if (index === 0 && msg.role === "user") {
+      parts.push({
+        fileData: {
+          mimeType: "application/pdf",
+          fileUri: MANUAL_1_URI,
+        },
+      });
+      parts.push({
+        fileData: {
+          mimeType: "application/pdf",
+          fileUri: MANUAL_2_URI,
+        },
+      });
+    }
+
+    parts.push({ text: msg.content });
+
+    return {
+      role: msg.role === "assistant" ? "model" : "user",
+      parts,
+    };
+  });
+
+  return {
+    contents,
+    systemInstruction: {
+      parts: [{ text: SYSTEM_INSTRUCTION }],
+    },
+    generationConfig: {
+      temperature: 0.3, // 매뉴얼 기반 답변이므로 낮은 온도
+      topP: 0.8,
+      maxOutputTokens: 4096,
+    },
+  };
+}
+
+Deno.serve(async (req: Request) => {
+  // CORS 프리플라이트 처리
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  try {
+    const { messages, stream = false } = await req.json();
+
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return new Response(
+        JSON.stringify({ error: "messages 배열이 필요합니다." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const geminiRequest = buildGeminiRequest(messages, stream);
+
+    // --- 스트리밍 응답 ---
+    if (stream) {
+      const response = await fetchGeminiWithRetry(GEMINI_STREAM_URL, geminiRequest);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Gemini API Error:", errorText);
+
+        const retryAfter = response.headers.get("retry-after");
+        const extraHeaders = retryAfter ? { "Retry-After": retryAfter } : {};
+        return new Response(
+          JSON.stringify({ error: "Gemini API 호출 실패", detail: errorText }),
+          {
+            status: response.status,
+            headers: {
+              ...corsHeaders,
+              ...extraHeaders,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+      }
+
+      // SSE 스트림을 그대로 클라이언트에 전달
+      return new Response(response.body, {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+        },
+      });
+    }
+
+    // --- 일반 응답 ---
+    const response = await fetchGeminiWithRetry(GEMINI_API_URL, geminiRequest);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Gemini API Error:", errorText);
+
+      const retryAfter = response.headers.get("retry-after");
+      const extraHeaders = retryAfter ? { "Retry-After": retryAfter } : {};
+      return new Response(
+        JSON.stringify({ error: "Gemini API 호출 실패", detail: errorText }),
+        {
+          status: response.status,
+          headers: {
+            ...corsHeaders,
+            ...extraHeaders,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+    }
+
+    const data = await response.json();
+    const answerText =
+      data.candidates?.[0]?.content?.parts?.[0]?.text || "답변을 생성하지 못했습니다.";
+
+    return new Response(
+      JSON.stringify({ answer: answerText }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  } catch (error) {
+    console.error("Edge Function Error:", error);
+    return new Response(
+      JSON.stringify({ error: "서버 오류가 발생했습니다.", detail: String(error) }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+});
